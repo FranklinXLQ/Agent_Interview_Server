@@ -53,7 +53,11 @@ README.md
 启动，需要在运行配置中提供该变量；终端中设置的变量不一定会被 IDE 继承。
 不要将真实密钥写入代码、文档或 Git。
 
-依赖变更后，在项目虚拟环境中执行 `python -m pip install -e .`，然后启动服务。
+模型调用使用 OpenAI Python SDK（`openai>=2.0,<3.0`）的 `AsyncOpenAI`，
+通过 DeepSeek 的兼容接口访问模型，仍使用 `DEEPSEEK_API_KEY`，无需 OpenAI 密钥。
+SDK 自动重试已关闭，当前只返回完整回答，不处理流式输出。
+
+本次新增 SDK 依赖，运行前需在项目虚拟环境中执行 `python -m pip install -e .`，然后启动服务。
 在 `/docs` 页面展开 `POST /chat`，输入：
 
 ```json
@@ -76,7 +80,12 @@ Android 客户端读取超时为 75 秒、完整请求超时为 90 秒，为后�
 请求按以下顺序处理：
 
 `main.py` 注册路由 → `api/chat.py` 接收请求 → `schemas/chat.py` 校验数据
-→ `services/deepseek.py` 调用模型 → 路由返回 `ChatResponse`。
+→ `services/deepseek.py` 通过异步 SDK 调用模型 → 路由返回 `ChatResponse`。
+
+SDK 调用形式为 `await client.chat.completions.create(...)`，通过
+`extra_body={"thinking": {"type": "disabled"}}` 传递 DeepSeek 扩展参数，
+从 `response.choices[0].message.content` 读取完整回答。SDK 的超时、连接、
+HTTP 状态及响应格式异常会转换为现有服务层异常，保持客户端接口与错误状态码不变。
 
 `config.py` 通过 FastAPI 的 `Depends` 注入路由，再作为普通参数传给服务函数。
 `Depends` 表示由 FastAPI 调用配置函数并提供结果。服务层不导入 FastAPI，
