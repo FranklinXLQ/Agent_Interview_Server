@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 
-from app.api import chat, hello
+from app.api import chat, chat_stream, hello
 
 
 def create_app() -> FastAPI:
@@ -14,6 +14,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(hello.router)
     app.include_router(chat.router)
+    app.include_router(chat_stream.router)
     return app
 
 

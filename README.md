@@ -1,6 +1,6 @@
 # Agent Interview Server
 
-基于 Python + FastAPI 的 AI 应用服务端。提供问候接口和 DeepSeek 非流式问答接口。
+基于 Python + FastAPI 的 AI 应用服务端。提供问候接口和 DeepSeek 非流式、流式问答接口。
 
 ## 环境要求
 
@@ -36,13 +36,15 @@ app/
 ├── api/
 │   ├── __init__.py
 │   ├── hello.py        # 连通检查接口
-│   └── chat.py         # 问答接口、HTTP 错误转换
+│   ├── chat.py         # 原非流式问答接口、HTTP 错误转换
+│   └── chat_stream.py  # 新增流式问答接口、SSE 事件编码
 ├── schemas/
 │   ├── __init__.py
 │   └── chat.py         # 请求和响应的数据模型
 └── services/
     ├── __init__.py
-    └── deepseek.py     # 模型调用、响应解析、服务异常
+    ├── deepseek.py     # 原非流式模型调用、响应解析、服务异常
+    └── deepseek_stream.py  # 新增流式模型调用、文本增量与结束检查
 pyproject.toml          # 项目元信息与依赖
 README.md
 ```
@@ -55,7 +57,7 @@ README.md
 
 模型调用使用 OpenAI Python SDK（`openai>=2.0,<3.0`）的 `AsyncOpenAI`，
 通过 DeepSeek 的兼容接口访问模型，仍使用 `DEEPSEEK_API_KEY`，无需 OpenAI 密钥。
-SDK 自动重试已关闭，当前只返回完整回答，不处理流式输出。
+SDK 自动重试已关闭。原 `POST /chat` 继续返回完整回答，新增 `POST /chat/stream` 提供流式输出。
 
 本次新增 SDK 依赖，运行前需在项目虚拟环境中执行 `python -m pip install -e .`，然后启动服务。
 在 `/docs` 页面展开 `POST /chat`，输入：
@@ -95,3 +97,61 @@ HTTP 状态及响应格式异常会转换为现有服务层异常，保持客户
 Python 的说明注释放在模块、类或函数开头，使用三引号文档字符串；
 普通代码说明使用 `#` 注释。
 此接口目前仅供本地学习，尚未加入身份验证，请勿直接暴露到公网。
+
+## DeepSeek 流式问答
+
+新增 `POST /chat/stream`，与原 `POST /chat` 独立，复用相同请求校验：
+
+```json
+{"message": "请介绍一下 FastAPI"}
+```
+
+响应类型为 `text/event-stream`，采用 SSE 格式。每个事件以空行结束，
+`data` 为 JSON，回答中的换行、引号等由 JSON 转义，不应按网络数据块直接拆事件。
+
+```text
+event: delta
+data: {"text":"FastAPI"}
+
+event: delta
+data: {"text":" 是一个 Python Web 框架。"}
+
+event: done
+data: {}
+
+```
+
+- `delta`：`text` 是新增文本，客户端按顺序追加，不是完整回答。
+- `done`：模型正常结束且已输出有效文本；此事件后流结束。
+- `error`：生成失败、超时、输出达到上限或上游提前断流；保留已收到的文本，提示回答未完成，不再发送 `done`。
+- 未收到 `done` 或 `error` 就断开，应视为传输中断，不能认为生成成功。
+
+错误事件示例：
+
+```text
+event: error
+data: {"message":"DeepSeek 流式响应超时，请稍后重试"}
+
+```
+
+请求参数不合法时返回 HTTP 422，密钥未配置时返回 HTTP 503；此时尚未开始 SSE。
+开始 SSE 后 HTTP 状态为 200，上游连接、鉴权、余额和生成错误均通过 `error` 事件通知，
+不能再通过 HTTP 502／504 表达，客户端必须解析终止事件。
+
+流式接口继续使用 `deepseek-flash`、非思考模式和最多 2048 token，关闭自动重试。
+流式生成总时限独立设为 180 秒；SDK 网络各阶段超时沿用配置的 60 秒，
+读取超时限制等待下一批网络数据的时间，不是整个回答的生成时间。本接口暂不发送心跳。
+流式读取被取消或发生异常时，通过上下文管理器关闭上游流和 SDK 客户端。
+原非流式接口的代码、响应格式和 60 秒总时限均保持不变。
+
+可在服务启动后手动使用以下命令查看逐段输出（`-N` 关闭 curl 输出缓冲）：
+
+```bash
+curl -N --request POST http://127.0.0.1:8000/chat/stream \
+  --header 'Content-Type: application/json' \
+  --data '{"message":"请介绍一下 FastAPI"}'
+```
+
+本次只新增后端能力，Android 仍使用原非流式接口。后续接入时需单独设置流式超时，
+现有客户端 90 秒完整请求上限可能在流式生成结束前切断连接。
+本次未执行启动、测试或模型调用，实际流式效果待手动确认。
