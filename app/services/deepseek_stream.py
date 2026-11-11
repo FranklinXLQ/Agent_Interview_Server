@@ -1,9 +1,10 @@
 """DeepSeek 流式服务：逐段读取模型回答，不依赖 FastAPI。"""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
+import anyio
 from openai import (
     APIConnectionError,
     APIError,
@@ -13,7 +14,7 @@ from openai import (
     AsyncOpenAI,
     AsyncStream,
 )
-from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
 from app.config import DeepSeekSettings
 from app.services.deepseek import (
@@ -28,35 +29,41 @@ STREAM_TOTAL_TIMEOUT_SECONDS = 180.0
 
 
 async def stream_deepseek(
-    message: str,
+    messages: list[ChatCompletionMessageParam],
     settings: DeepSeekSettings,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     """建立模型流并逐段返回文本，将 SDK 异常转换为服务层异常。"""
     if not settings.api_key:
         raise DeepSeekConfigurationError("服务端未配置 DEEPSEEK_API_KEY")
 
+    client = AsyncOpenAI(
+        api_key=settings.api_key,
+        base_url=settings.base_url,
+        timeout=settings.timeout_seconds,
+        max_retries=0,
+    )
+    stream: AsyncStream[ChatCompletionChunk] | None = None
     try:
         async with asyncio.timeout(STREAM_TOTAL_TIMEOUT_SECONDS):
-            async with AsyncOpenAI(
-                api_key=settings.api_key,
-                base_url=settings.base_url,
-                # 网络各阶段超时沿用配置；读取时限制等待下一批数据的时间。
-                timeout=settings.timeout_seconds,
-                max_retries=0,
-            ) as client:
+            try:
                 stream = await client.chat.completions.create(
                     model=settings.model,
-                    messages=[{"role": "user", "content": message}],
+                    messages=messages,
                     stream=True,
                     max_tokens=settings.max_tokens,
                     extra_body={"thinking": {"type": "disabled"}},
                 )
-
-                # 正常结束、异常或取消时都关闭上游流，不继续消费模型输出。
-                async with stream:
-                    async with aclosing(read_model_stream(stream)) as parts:
-                        async for text in parts:
-                            yield text
+                async with aclosing(read_model_stream(stream)) as parts:
+                    async for text in parts:
+                        yield text
+            finally:
+                # 断开触发取消时仍关闭网络资源，且不在 yield 外包取消屏蔽作用域。
+                with anyio.CancelScope(shield=True):
+                    try:
+                        if stream is not None:
+                            await stream.close()
+                    finally:
+                        await client.close()
     except (TimeoutError, APITimeoutError):
         raise DeepSeekTimeoutError("DeepSeek 流式响应超时，请稍后重试") from None
     except APIConnectionError:
@@ -71,7 +78,7 @@ async def stream_deepseek(
 
 async def read_model_stream(
     stream: AsyncStream[ChatCompletionChunk],
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str, None]:
     """提取文本增量，只有收到正常结束标识且存在有效文本才视为完成。"""
     has_text = False
 

@@ -3,11 +3,13 @@
 from fastapi import FastAPI
 
 from app.api import chat, chat_stream, hello
+from app.lifespan import lifespan
 
 
 def create_app() -> FastAPI:
     """创建应用，并集中注册各业务模块的路由。"""
     app = FastAPI(
+        lifespan=lifespan,
         title="Agent Interview Server",
         version="0.1.0",
         description="AI 应用服务端",
