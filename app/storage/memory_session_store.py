@@ -4,7 +4,7 @@ from time import monotonic
 from uuid import uuid4
 
 from app.models.chat_session import ChatSession
-from app.models.conversation_context import ConversationContext
+from app.models.chat_request_context import ChatRequestContext
 from app.models.conversation_turn import ConversationTurn
 from app.errors.session_error import SessionError
 from app.settings.session_settings import SessionSettings
@@ -18,7 +18,7 @@ class MemorySessionStore:
         self.settings = settings
         self._sessions: dict[str, ChatSession] = {}
 
-    def begin_turn(self, session_id: str, message: str) -> ConversationContext:
+    def begin_turn(self, session_id: str, message: str) -> ChatRequestContext:
         """原子地占用会话并返回裁剪后的历史，不把本次问题提前入库。"""
         self.cleanup_expired()
         session = self._sessions.get(session_id)
@@ -34,14 +34,14 @@ class MemorySessionStore:
         request_id = uuid4().hex
         session.active_request_id = request_id
         session.updated_at = monotonic()
-        return ConversationContext(
+        return ChatRequestContext(
             session_id=session_id,
             request_id=request_id,
             message=message,
             turns=self._select_turns(session.turns, len(message)),
         )
 
-    def complete_turn(self, context: ConversationContext, answer: str) -> None:
+    def complete_turn(self, context: ChatRequestContext, answer: str) -> None:
         """生成正常完成后一次性提交问题和回答，并释放本次占用。"""
         session = self._sessions.get(context.session_id)
         if session is None or session.active_request_id != context.request_id:
@@ -52,7 +52,7 @@ class MemorySessionStore:
         session.updated_at = monotonic()
         session.active_request_id = None
 
-    def release_turn(self, context: ConversationContext) -> None:
+    def release_turn(self, context: ChatRequestContext) -> None:
         """失败或断开时只释放对应请求，重复清理不会影响后续请求。"""
         session = self._sessions.get(context.session_id)
         if session is None or session.active_request_id != context.request_id:

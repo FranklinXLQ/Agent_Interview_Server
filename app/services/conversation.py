@@ -7,7 +7,7 @@ from anyio.lowlevel import checkpoint
 from openai.types.chat import ChatCompletionMessageParam
 
 from app.config import DeepSeekSettings
-from app.models.conversation_context import ConversationContext
+from app.models.chat_request_context import ChatRequestContext
 from app.services.deepseek import DeepSeekError
 from app.services.deepseek_stream import stream_deepseek
 from app.storage.memory_session_store import MemorySessionStore
@@ -20,17 +20,17 @@ class ConversationService:
         """注入当前应用的会话存储，不使用跨应用的全局字典。"""
         self._store = store
 
-    def begin_turn(self, session_id: str, message: str) -> ConversationContext:
+    def begin_turn(self, session_id: str, message: str) -> ChatRequestContext:
         """在开始 SSE 前占用会话，让并发冲突可以返回 HTTP 错误。"""
         return self._store.begin_turn(session_id, message)
 
-    def release_turn(self, context: ConversationContext) -> None:
+    def release_turn(self, context: ChatRequestContext) -> None:
         """流式响应退出时归还占用，不保存失败或中断的内容。"""
         self._store.release_turn(context)
 
     async def stream_reply(
         self,
-        context: ConversationContext,
+        context: ChatRequestContext,
         settings: DeepSeekSettings,
     ) -> AsyncGenerator[str, None]:
         """边转发边累积回答，模型正常结束且未取消时才保存历史。"""
@@ -56,7 +56,7 @@ class ConversationService:
 
     def _build_messages(
         self,
-        context: ConversationContext,
+        context: ChatRequestContext,
     ) -> list[ChatCompletionMessageParam]:
         """按用户、助手的时间顺序组装历史，最后追加当前问题。"""
         messages: list[ChatCompletionMessageParam] = []

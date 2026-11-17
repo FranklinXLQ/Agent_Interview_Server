@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from app.api.chat_stream_response import ChatStreamingResponse
 from app.api.dependencies import get_conversation_service
 from app.config import DeepSeekSettings, get_deepseek_settings
-from app.models.conversation_context import ConversationContext
+from app.models.chat_request_context import ChatRequestContext
 from app.schemas.chat_stream import ChatStreamRequest
 from app.services.conversation import ConversationService
 from app.services.deepseek import DeepSeekError
@@ -61,7 +61,7 @@ async def chat_stream(
 
 
 async def send_chat_events(
-    context: ConversationContext,
+    context: ChatRequestContext,
     settings: DeepSeekSettings,
     service: ConversationService,
 ) -> AsyncGenerator[str, None]:
